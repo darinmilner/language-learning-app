@@ -1,7 +1,8 @@
 pipeline {
   agent any
-  
-    def tf = load "groovy/terraformUtils.groovy"
+
+    def tfLib = evaluate readTrusted("groovy/terraformUtils.groovy")
+    def commonLib = evaluate readTrusted("groovy/common.groovy")
 
     parameters {
         string(name: 'REPO_URL', defaultValue: 'https://github.com/your-username/your-repo.git', description: 'GitHub Repository URL')
@@ -18,22 +19,21 @@ pipeline {
     }
 
     stages {
-        stage('Clone Repo') {
+        stage("Clone Repo") {
             steps {
                 echo "Cloning ${params.REPO_URL}"
                 git url: "${params.REPO_URL}"
             }
         }
 
-         stage('Print Selected AWS Region') {
+         stage("Print Selected AWS Region") {
             steps {
                 echo "User selected AWS region: ${REGION}"
-                // You could add region-specific logic here
             }
         }
 
-        // Example additional stage
-        stage('Use AWS CLI (optional)') {
+        // TODO create function to install AWS CLI and Login
+        stage("Install AWS CLI") {
             steps {
                 script {
                     // Example AWS CLI command (assumes AWS CLI & creds are configured)
@@ -43,10 +43,10 @@ pipeline {
         }
     
 
-        stage('Install Terraform') {
+        stage("Install Terraform") {
             steps {
                 script {
-                    tf.downloadTerraform()
+                    tfLib.downloadTerraform()
                 }
             }
         }

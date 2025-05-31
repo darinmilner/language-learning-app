@@ -30,7 +30,9 @@ def terraformApply(String dir) {
 
 def terraformDestroy(String dir, String tfVarsFile = 'terraform.tfvars') {
     echo "Destroying Terraform-managed infrastructure in directory: ${dir}"
-    sh "cd ${dir} && terraform destroy -auto-approve -var-file=${tfVarsFile}"
+    // sh "cd ${dir} && terraform destroy -auto-approve -var-file=${tfVarsFile}"
+    // TODO: pass destroy command to python file
+    sh "cd ${dir}/scripts python3 run_terraform.py"
 }
 
 return this
