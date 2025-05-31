@@ -1,5 +1,5 @@
 pipeline {
-  agent any
+    agent any
 
     def tfLib = evaluate readTrusted("groovy/terraformUtils.groovy")
     def commonLib = evaluate readTrusted("groovy/common.groovy")
@@ -51,7 +51,7 @@ pipeline {
             }
         }
 
-        // TODO: Add Email validation (AWS SQS)
+        // TODO: Add Email validation (AWS SNS)
         // stage('Initialize & Validate Terraform') {
         //     Result: SUCCESS
         //     URL: ${env.BUILD_URL}
