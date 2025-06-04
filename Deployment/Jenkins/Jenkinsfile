@@ -32,13 +32,18 @@ pipeline {
             }
         }
 
-        // TODO create function to install AWS CLI and Login
-        stage("Install AWS CLI") {
+       stage('Setup AWS CLI') {
             steps {
-                script {
-                    // Example AWS CLI command (assumes AWS CLI & creds are configured)
-                    sh "aws sts get-caller-identity --region ${REGION}"
-                }
+                sh '''
+                    python3 scripts/aws_setup.py
+                    aws --version
+                '''
+            }
+        }
+
+        stage('Verify Login') {
+            steps {
+                sh 'aws sts get-caller-identity'
             }
         }
     
