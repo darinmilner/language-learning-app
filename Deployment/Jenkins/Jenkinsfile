@@ -14,6 +14,8 @@ pipeline {
     environment {
         REGION = "${params.AWS_REGION}"
         BUCKET = "${params.BUCKET_NAME}"
+        TF_STATE_KEY = "terraform.tfstate"
+        HASH_KEY = "lambda_hash.txt"  // Key for the hash file in S3
         TF_DIR = 'Deployment/Terraform'
         NOTIFY_EMAIL = "youremail"
     }
@@ -46,12 +48,56 @@ pipeline {
                 sh 'aws sts get-caller-identity'
             }
         }
-    
 
+        stage('Generate Hash') {
+            steps {
+                checkout scm
+                sh "chmod +x generate_hash.sh && ./scripts/generate_hash.sh"
+            }
+        }
+    
+        stage('Download Previous Hash') {
+            steps {
+                script {
+                // Download previous hash from S3 (if exists)
+                sh """
+                    aws s3 cp "s3://${env.S3_BUCKET}/${env.HASH_KEY}" previous_hash.txt || true
+                """
+                }
+            }
+        }
+    
+        stage('Compare Hashes') {
+            steps {
+                script {
+                    currentHash = readFile('lambda_hash.txt').trim()
+                    previousHash = fileExists('previous_hash.txt') ? readFile('previous_hash.txt').trim() : ""
+                    
+                    if (currentHash == previousHash) {
+                        // Skip deployment if hashes match
+                        echo "Lambda code unchanged. Skipping Terraform deployment."
+                        currentBuild.result = 'SUCCESS'
+                        error("STOP_PIPELINE") // Halt pipeline gracefully
+                    } else {
+                        echo "Lambda code changed. Proceeding with deployment."
+                    }
+                }
+            }
+        }
+    
         stage("Install Terraform") {
             steps {
                 script {
                     tfLib.downloadTerraform()
+                }
+            }
+        }
+
+        stage('Upload New Hash') {
+            steps {
+                script {
+                // Upload the new hash to S3
+                sh "aws s3 cp lambda_hash.txt s3://${env.S3_BUCKET}/${env.HASH_KEY}"
                 }
             }
         }
