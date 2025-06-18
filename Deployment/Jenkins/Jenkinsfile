@@ -9,6 +9,11 @@ pipeline {
         string(name: 'BUCKET_NAME', defaultValue: 'jenkins-terraform-bucket-123456', description: 'S3 Bucket Name')
         choice(name: 'AWS_REGION', choices: ['us-east-1', 'us-west-1', 'eu-west-1'], description: 'AWS Region')
         booleanParam(name: 'DESTROY_INFRASTRUCTURE', defaultValue: false, description: 'Destroy infrastructure instead of provisioning it')
+        booleanParam(
+            name: 'DEPLOY_LAMBDAS',
+            defaultValue: false,
+            description: 'Check to deploy all Lambda modules, uncheck to deploy core infrastructure'
+        )
     }
 
     environment {
@@ -84,11 +89,57 @@ pipeline {
                 }
             }
         }
+
+        // runs python script
+        stage('Detect Changes') {
+            if (params.DEPLOY_LAMBDAS){
+                steps {
+                    script {
+                        // Define your Lambda directories
+                        lambdaModules = ["lambda1" "lambda2" "lambda3"]
+                        
+                        // Run change detection
+                        def changeStatus = sh(
+                            script: "python3 hash_check.py --s3-bucket ${env.S3_BUCKET} --key-prefix ${env.KEY_PREFIX} ${LAMBDA_DIRS}",
+                            returnStatus: true
+                        )
+
+                        buildLambdaModules(lambdaModules)
+                        
+                        // Store change status in environment variable
+                        env.CHANGES_DETECTED = (changeStatus == 1)
+                    }
+                }
+            }        
+        }
     
         stage("Install Terraform") {
             steps {
                 script {
                     tfLib.downloadTerraform()
+                }
+            }
+        }
+
+        stage('Production Approval') {
+            when { 
+                expression { params.DEPLOY_LAMBDAS && ENV == 'prod' }
+            }
+            steps {
+                input message: 'Approve production deployment?', ok: 'Deploy'
+            }
+        }
+
+        // Apply Terraform 
+        stage('Terraform Apply') {
+            if (!params.DEPLOY_LAMBDAS){
+                steps {
+                    script {
+                        sh """
+                            terraform init -backend-config="bucket=${env.S3_BUCKET}"
+                            terraform apply -auto-approve
+                        """
+                    }
                 }
             }
         }
@@ -124,3 +175,29 @@ pipeline {
         // }
     }
 }
+
+// Deploy all Lambda modules
+def buildLambdaModules(modules) {
+    stage('Deploy Lambda Modules') {
+        steps {
+            script {
+                modules.each { module ->
+                    stage("Deploy: ${module}") {
+                        dir(module) {
+                             script {
+                                sh """
+                                    terraform init -backend-config="bucket=${env.S3_BUCKET}"
+                                    terraform apply -auto-approve
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+
