@@ -1,0 +1,26 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "acm:ImportCertificate",
+                "acm:ListCertificates",
+                "acm:DescribeCertificate"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:*"
+            ],
+            "Resource": "arn:aws:s3:::temp-cert-*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "lambda:InvokeFunction",
+            "Resource": "arn:aws:lambda:*:account-id:function:acm-cert-manager"
+        }
+    ]
+}

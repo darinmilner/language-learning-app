@@ -1,0 +1,115 @@
+// Jenkinsfile
+
+pipeline {
+    agent {
+        docker {
+            image 'your-registry/custom-jenkins-agent:latest'
+            args '-v /var/run/docker.sock:/var/run/docker.sock'
+            label 'aws-cert-agent'
+        }
+    }
+    
+    parameters {
+        string(name: 'DOMAIN', defaultValue: 'example.com', description: 'Domain for SSL certificate')
+        string(name: 'EMAIL', defaultValue: 'admin@example.com', description: 'Notification email')
+        string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS Region')
+    }
+    
+    environment {
+        WORK_DIR = "${WORKSPACE}/cert_gen"
+        GPG_PASSPHRASE = credentials('GPG_SECRET')
+        S3_BUCKET = "temp-cert-${UUID.randomUUID().toString()}"
+    }
+    
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    // Load shared library
+                    awsCertUtils = load "utils/awsCertUtils.groovy"
+                }
+            }
+        }
+        
+        stage('Check Certificate') {
+            steps {
+                script {
+                    def arn = awsCertUtils.checkCertificate(params.DOMAIN, params.AWS_REGION)
+                    if(arn) {
+                        echo "Valid certificate exists: ${arn}"
+                        currentBuild.result = 'SUCCESS'
+                        error("Stopping pipeline - valid certificate exists")
+                    }
+                }
+            }
+        }
+        
+        stage('Prepare Environment') {
+            steps {
+                script {
+                    sh "mkdir -p ${env.WORK_DIR}"
+                    awsCertUtils.createS3Bucket(params.AWS_REGION, env.S3_BUCKET)
+                }
+            }
+        }
+        
+        stage('Generate Certificate') {
+            steps {
+                script {
+                    awsCertUtils.generateCertificate(
+                        params.DOMAIN,
+                        params.EMAIL,
+                        env.WORK_DIR
+                    )
+                }
+            }
+        }
+        
+        stage('Upload and Import') {
+            steps {
+                script {
+                    awsCertUtils.encryptAndUpload(
+                        env.S3_BUCKET,
+                        params.AWS_REGION,
+                        env.WORK_DIR,
+                        params.DOMAIN,
+                        env.GPG_PASSPHRASE
+                    )
+                    
+                    def arn = awsCertUtils.importCertificate(
+                        env.S3_BUCKET,
+                        params.AWS_REGION,
+                        params.DOMAIN,
+                        env.GPG_PASSPHRASE
+                    )
+                    
+                    echo "Certificate imported successfully: ${arn}"
+                    env.CERTIFICATE_ARN = arn
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Secure cleanup
+                awsCertUtils.cleanupS3Bucket(env.S3_BUCKET, params.AWS_REGION)
+                sh "rm -rf ${env.WORK_DIR} || true"
+                
+                // Rotate GPG key
+                withCredentials([string(credentialsId: 'GPG_SECRET', variable: 'GPG_PASSPHRASE')]) {
+                    sh """
+                    echo ${GPG_PASSPHRASE} | gpg --batch --yes --delete-secret-keys
+                    """
+                }
+            }
+        }
+        success {
+            echo "Certificate management completed successfully"
+        }
+        failure {
+            echo "Pipeline failed - check logs for details"
+        }
+    }
+}
