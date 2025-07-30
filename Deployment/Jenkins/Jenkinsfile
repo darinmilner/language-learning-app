@@ -3,6 +3,7 @@ pipeline {
 
     def tfLib = evaluate readTrusted("groovy/terraformUtils.groovy")
     def commonLib = evaluate readTrusted("groovy/common.groovy")
+    def lambdas = load 'groovy/lambdas.groovy'
 
     parameters {
         string(name: 'REPO_URL', defaultValue: 'https://github.com/your-username/your-repo.git', description: 'GitHub Repository URL')
@@ -111,6 +112,51 @@ pipeline {
                     }
                 }
             }        
+        }
+
+         stage('Validate Input') {
+            steps {
+                script {
+                    lambdas.validate(params.LAMBDA_FOLDER)
+                }
+            }
+        }
+        
+        stage('Setup Environment') {
+            steps {
+                script {
+                    lambdas.setupEnv(params.LAMBDA_FOLDER, env.VENV_DIR)
+                }
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    lambdas.installDeps(params.LAMBDA_FOLDER, env.VENV_DIR)
+                }
+            }
+        }
+        
+        stage('Package Lambda') {
+            steps {
+                script {
+                    lambdas.package(params.LAMBDA_FOLDER, env.VENV_DIR)
+                }
+            }
+        }
+        
+        stage('Upload to S3') {
+            steps {
+                script {
+                    lambdas.uploadS3(
+                        params.LAMBDA_FOLDER, 
+                        env.S3_BUCKET, 
+                        env.AWS_REGION, 
+                        env.AWS_CREDENTIALS_ID
+                    )
+                }
+            }
         }
     
         stage("Install Terraform") {
