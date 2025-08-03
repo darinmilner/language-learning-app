@@ -146,6 +146,27 @@ pipeline {
             }
         }
         
+       stage('Network Check') {
+            steps {
+                script {
+                    echo "🔍 Testing S3 connectivity to ${env.AWS_REGION}"
+                    sh """
+                        # Install tcpping if missing (Debian/Ubuntu)
+                        if ! command -v tcpping &> /dev/null; then
+                            sudo apt-get install -y tcptraceroute
+                            sudo ln -s /usr/bin/tcptraceroute /usr/bin/tcpping
+                        fi
+                        
+                        # Run connectivity test
+                        tcpping s3.${env.AWS_REGION}.amazonaws.com 443
+                        
+                        # Alternative: Use netcat
+                        echo | nc -v -w 2 s3.${env.AWS_REGION}.amazonaws.com 443
+                    """
+                }
+            }
+        }
+
         stage('Upload to S3') {
             steps {
                 script {

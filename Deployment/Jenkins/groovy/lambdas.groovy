@@ -49,18 +49,51 @@ def packageLambdaFunction(lambdaFolder, venvDir) {
     echo "📦 Created deployment package: ${lambdaFolder}.zip"
 }
 
+// For cross-region transfers or large files, enable S3 Transfer Acceleration:
 def uploadToS3(lambdaFolder, s3Bucket, awsRegion, awsCredentialsId) {
     withCredentials([[
         $class: 'AmazonWebServicesCredentialsBinding',
         credentialsId: awsCredentialsId
     ]]) {
-        sh """
-            aws s3 cp ${lambdaFolder}.zip \
-                s3://${s3Bucket}/${lambdaFolder}/${lambdaFolder}.zip \
-                --region ${awsRegion}
-        """
+        // Retry mechanism with exponential backoff
+        def maxRetries = 3
+        def retryCount = 0
+        def success = false
+        def backoff = 5 // seconds
+        
+        while (retryCount < maxRetries && !success) {
+            retryCount++
+            try {
+                echo "⏳ Attempt ${retryCount}/${maxRetries}: Uploading ${lambdaFolder}.zip to S3"
+                
+                sh """
+                    # Use AWS CLI with timeout and retry parameters
+                    # Enable transfer acceleration
+                    AWS_USE_ACCELERATE_ENDPOINT=true \
+                    AWS_RETRY_MODE=standard \
+                    AWS_MAX_ATTEMPTS=3 \
+                    aws s3 cp ${lambdaFolder}.zip \
+                        s3://${s3Bucket}/${lambdaFolder}/${lambdaFolder}.zip \
+                        --region ${awsRegion} \
+                        --cli-connect-timeout 30 \
+                        --cli-read-timeout 60 \
+                        --no-progress
+                """
+                success = true
+                echo "✅ Upload succeeded on attempt ${retryCount}"
+            } catch (Exception e) {
+                echo "⚠️ Upload attempt ${retryCount} failed: ${e.getMessage()}"
+                if (retryCount < maxRetries) {
+                    echo "⌛ Retrying in ${backoff} seconds..."
+                    sleep(backoff)
+                    backoff *= 2 // Exponential backoff
+                } else {
+                    error("❌ Failed to upload after ${maxRetries} attempts")
+                }
+            }
+        }
     }
-    echo "🚀 Uploaded to S3: s3://${s3Bucket}/${lambdaFolder}/"
+    echo "🚀 Uploaded ZIP to S3: s3://${s3Bucket}/${lambdaFolder}/"
 }
 
 def cleanUpResources(lambdaFolder, venvDir) {

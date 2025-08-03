@@ -9,6 +9,10 @@ def buildPythonEnvironment() {
 }
 
 def configureAWSProfile(String awsRegion) {
+    echo "Install AWS CLI"
+
+    sh 'pip install --upgrade awscli'
+
     echo "Configuring AWS Profile"
 
     withCredentials([usernamePassword(credentialsId: "amazon", usernameVariable: "ACCESSKEY", passwordVariable: "SECRETKEY")]) {
