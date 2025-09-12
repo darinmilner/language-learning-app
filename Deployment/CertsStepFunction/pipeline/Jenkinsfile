@@ -1,0 +1,191 @@
+// Load utility functions
+def terraformUtils = load 'groovy/terraformUtils.groovy'
+
+pipeline {
+    agent {
+        docker {
+            image 'python:3.12'
+            args '-v $HOME/.aws:/root/.aws -v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
+    
+    parameters {
+        string(name: 'DOMAIN', defaultValue: 'example.com', description: 'Domain for certificate management')
+        string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS region for deployment')
+        string(name: 'TF_VERSION', defaultValue: '1.1.7', description: 'Terraform version')
+        string(name: 'AWS_CLI_VERSION', defaultValue: '2.4.0', description: 'AWS CLI version')
+        booleanParam(name: 'DESTROY', defaultValue: false, description: 'Destroy resources after execution')
+        string(name: 'TF_BACKEND_BUCKET', defaultValue: '', description: 'S3 bucket for Terraform backend')
+        string(name: 'TF_BACKEND_KEY', defaultValue: 'terraform.tfstate', description: 'S3 key for Terraform backend')
+    }
+    
+    environment {
+        CERTIFICATE_BUCKET = "certificate-bucket-${params.DOMAIN}-${env.BUILD_NUMBER}"
+        TF_WORKSPACE = "certificate-management-${params.DOMAIN}"
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Install Tools') {
+            steps {
+                script {
+                    terraformUtils.installTerraform(params.TF_VERSION)
+                    terraformUtils.installAwsCli(params.AWS_CLI_VERSION)
+                }
+            }
+        }
+        
+        stage('Setup Terraform Backend') {
+            when {
+                expression { params.TF_BACKEND_BUCKET != '' }
+            }
+            steps {
+                script {
+                    terraformUtils.setupTerraformBackend(
+                        params.TF_BACKEND_BUCKET,
+                        params.TF_BACKEND_KEY,
+                        params.AWS_REGION
+                    )
+                }
+            }
+        }
+        
+        stage('Build Lambda Layers') {
+            steps {
+                script {
+                    terraformUtils.buildLambdaLayers()
+                }
+            }
+        }
+        
+        stage('Package Lambdas') {
+            steps {
+                script {
+                    // Install function-specific dependencies and package
+                    dir('lambdas/check_certificate') {
+                        sh 'pip install -r requirements.txt -t .'
+                        // Remove dependencies that are in the layer
+                        sh 'rm -rf boto3* botocore* dateutil* requests*'
+                        sh 'zip -r ../check_certificate.zip .'
+                    }
+                    
+                    dir('lambdas/generate_certificate') {
+                        sh 'pip install -r requirements.txt -t .'
+                        // Remove dependencies that are in the layer
+                        sh 'rm -rf boto3* botocore* dateutil* requests* certbot*'
+                        sh 'zip -r ../generate_certificate.zip .'
+                    }
+                    
+                    dir('lambdas/replace_certificate') {
+                        sh 'pip install -r requirements.txt -t .'
+                        // Remove dependencies that are in the layer
+                        sh 'rm -rf boto3* botocore* dateutil* requests*'
+                        sh 'zip -r ../replace_certificate.zip .'
+                    }
+                }
+            }
+        }
+        
+        stage('Run Unit Tests') {
+            steps {
+                script {
+                    dir('lambdas/check_certificate') {
+                        sh 'python -m pytest test_check_certificate.py -v'
+                    }
+                    
+                    dir('lambdas/generate_certificate') {
+                        sh 'python -m pytest test_generate_certificate.py -v'
+                    }
+                    
+                    dir('lambdas/replace_certificate') {
+                        sh 'python -m pytest test_replace_certificate.py -v'
+                    }
+                }
+            }
+        }
+        
+        stage('Terraform Init') {
+            steps {
+                script {
+                    terraformUtils.terraformInit('terraform')
+                }
+            }
+        }
+        
+        stage('Terraform Validate') {
+            steps {
+                script {
+                    terraformUtils.validateTerraform('terraform')
+                }
+            }
+        }
+        
+        stage('Terraform Plan') {
+            steps {
+                script {
+                    terraformUtils.terraformPlan('terraform', "-var='domain=${params.DOMAIN}' -var='certificate_bucket=${env.CERTIFICATE_BUCKET}' -out=tfplan")
+                }
+            }
+        }
+        
+        stage('Terraform Apply') {
+            when {
+                expression { !params.DESTROY }
+            }
+            steps {
+                script {
+                    terraformUtils.terraformApply('terraform', "tfplan")
+                }
+            }
+        }
+        
+        stage('Terraform Destroy') {
+            when {
+                expression { params.DESTROY }
+            }
+            steps {
+                script {
+                    terraformUtils.terraformDestroy('terraform', "-var='domain=${params.DOMAIN}' -var='certificate_bucket=${env.CERTIFICATE_BUCKET}'")
+                }
+            }
+        }
+        
+        stage('Get Outputs') {
+            when {
+                expression { !params.DESTROY }
+            }
+            steps {
+                script {
+                    def stepFunctionArn = terraformUtils.terraformOutput('terraform', 'step_function_arn')
+                    echo "Step Function ARN: ${stepFunctionArn}"
+                    
+                    // Store output as environment variable for downstream jobs
+                    env.STEP_FUNCTION_ARN = stepFunctionArn
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Clean up Terraform files
+                terraformUtils.cleanupTerraform()
+                
+                // Clean up workspace
+                cleanWs()
+            }
+        }
+        success {
+            echo 'Certificate management pipeline completed successfully'
+        }
+        failure {
+            echo 'Certificate management pipeline failed'
+        }
+    }
+}

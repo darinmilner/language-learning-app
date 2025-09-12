@@ -1,0 +1,6 @@
+certbot
+boto3
+botocore
+python-dateutil
+certbot-dns-route53
+requests
