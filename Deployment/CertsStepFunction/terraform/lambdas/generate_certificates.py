@@ -5,11 +5,13 @@ import tempfile
 import logging
 
 logger = logging.getLogger()
+logger.setLevel("INFO")
 bucket_name = os.environ.get('CERTIFICATE_BUCKET')
 
 def lambda_handler(event, context):
     domain = event['domain']
-     
+    logger.info(f"Event {event}")
+    
     # Create temporary directory for Certbot
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
@@ -62,6 +64,8 @@ def lambda_handler(event, context):
                 Body=chain,
                 ServerSideEncryption='AES256'
             )
+            
+            logger.info(f"Cert files uploaded to {bucket_name}")
             
             return {
                 'success': True,

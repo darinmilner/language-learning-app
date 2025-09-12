@@ -1,6 +1,9 @@
 import os
 import boto3
 
+logger = logging.getLogger()
+logger.setLevel("INFO")
+
 bucket_name = os.environ.get('CERTIFICATE_BUCKET')
 s3 = boto3.client('s3')
 acm = boto3.client('acm')
@@ -8,6 +11,7 @@ acm = boto3.client('acm')
 def lambda_handler(event, context):
     domain = event['domain']    
     old_cert_arn = event.get('certificate_arn')
+    logger.info(f"Event {event}")
         
     try:
         # Retrieve certificate files from S3
@@ -34,7 +38,7 @@ def lambda_handler(event, context):
                 acm.delete_certificate(CertificateArn=old_cert_arn)
             except Exception as e:
                 # Log but don't fail if deletion fails
-                print(f"Failed to delete old certificate: {str(e)}")
+                logger.error(f"Failed to delete old certificate: {str(e)}")
         
         return {
             'success': True,

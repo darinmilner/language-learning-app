@@ -1,22 +1,26 @@
 import boto3
-from datetime import datetime, timedelta
+import logging
 import os
+from datetime import datetime, timedelta
 
 bucket_name = os.environ.get('CERTIFICATE_BUCKET')
+acm = boto3.client('acm')
+s3 = boto3.client('s3')
+
+logger = logging.getLogger()
+logger.setLevel("INFO")
 
 def lambda_handler(event, context):
-    acm = boto3.client('acm')
-    s3 = boto3.client('s3')
-    
     # Get domain from event or use default
     domain = event.get('domain', 'example.com')
-   
+    logger.info(f"Event {event}")
     # Check if certificate exists in S3 (previously generated)
     try:
         s3.head_object(Bucket=bucket_name, Key=f"{domain}/cert.pem")
         s3_cert_exists = True
     except Exception as e:
         s3_cert_exists = False
+        logger.info("Certificate does not exist in S3")
     
     # Check ACM for existing certificate
     certificates = acm.list_certificates()['CertificateSummaryList']
