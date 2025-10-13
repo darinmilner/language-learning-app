@@ -1,0 +1,82 @@
+{
+  "Comment": "SSL Certificate Management Workflow with Enhanced S3 Storage",
+  "StartAt": "CheckCertificate",
+  "States": {
+    "CheckCertificate": {
+      "Type": "Task",
+      "Resource": "${check_certificate_lambda_arn}",
+      "Next": "CertificateExpired?",
+      "Parameters": {
+        "domain.$": "$.domain",
+        "bucket_name": "${certificate_bucket_name}"
+      },
+      "ResultPath": "$.check_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "CertificateExpired?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.check_result.expired",
+          "BooleanEquals": true,
+          "Next": "GenerateCertificate"
+        }
+      ],
+      "Default": "Success"
+    },
+    "GenerateCertificate": {
+      "Type": "Task",
+      "Resource": "${generate_certificate_lambda_arn}",
+      "Next": "ReplaceCertificate",
+      "Parameters": {
+        "domain.$": "$.domain",
+        "bucket_name": "${certificate_bucket_name}",
+        "transaction_id.$": "$.check_result.transaction_id",
+        "certificate_arn.$": "$.check_result.certificate_arn"
+      },
+      "ResultPath": "$.generation_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "ReplaceCertificate": {
+      "Type": "Task",
+      "Resource": "${replace_certificate_lambda_arn}",
+      "End": true,
+      "Parameters": {
+        "domain.$": "$.domain",
+        "bucket_name": "${certificate_bucket_name}",
+        "transaction_id.$": "$.check_result.transaction_id",
+        "certificate_arn.$": "$.check_result.certificate_arn"
+      },
+      "ResultPath": "$.replacement_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ]
+    },
+    "Success": {
+      "Type": "Succeed"
+    },
+    "Failure": {
+      "Type": "Fail",
+      "Cause": "Certificate management workflow failed"
+    }
+  }
+}

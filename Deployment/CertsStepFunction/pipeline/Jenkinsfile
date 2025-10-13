@@ -1,5 +1,8 @@
+// Jenkinsfile
+
 // Load utility functions
-def terraformUtils = load 'groovy/terraformUtils.groovy'
+def terraformUtils = load "groovy/terraformUtils.groovy"
+def pythonUtils = load "groovy/pythonUtils.groovy"
 
 pipeline {
     agent {
@@ -17,11 +20,14 @@ pipeline {
         booleanParam(name: 'DESTROY', defaultValue: false, description: 'Destroy resources after execution')
         string(name: 'TF_BACKEND_BUCKET', defaultValue: '', description: 'S3 bucket for Terraform backend')
         string(name: 'TF_BACKEND_KEY', defaultValue: 'terraform.tfstate', description: 'S3 key for Terraform backend')
+        string(name: 'LOG_LEVEL', defaultValue: 'INFO', description: 'Lambda log level')
+        number(name: 'MINIMUM_COVERAGE', defaultValue: 70, description: 'Minimum test coverage percentage')
     }
     
     environment {
         CERTIFICATE_BUCKET = "certificate-bucket-${params.DOMAIN}-${env.BUILD_NUMBER}"
         TF_WORKSPACE = "certificate-management-${params.DOMAIN}"
+        TEST_BUCKET = "test-reports-${params.DOMAIN}"
     }
     
     stages {
@@ -36,6 +42,49 @@ pipeline {
                 script {
                     terraformUtils.installTerraform(params.TF_VERSION)
                     terraformUtils.installAwsCli(params.AWS_CLI_VERSION)
+                    pythonUtils.installPythonDependencies()
+                }
+            }
+        }
+        
+        stage('Install Lambda Dependencies') {
+            steps {
+                script {
+                    pythonUtils.installLambdaDependencies()
+                }
+            }
+        }
+        
+        stage('Run Lambda Tests') {
+            steps {
+                script {
+                    // Run tests for all Lambda functions
+                    def testResults = pythonUtils.runLambdaTests()
+                    
+                    // Generate combined coverage report
+                    def combinedReport = pythonUtils.generateCombinedCoverageReport(testResults, env.TEST_BUCKET)
+                    
+                    // Validate coverage against minimum threshold
+                    pythonUtils.validateTestCoverage(testResults, params.MINIMUM_COVERAGE)
+                    
+                    // Store test results for later use
+                    env.TEST_RESULTS = groovy.json.JsonOutput.toJson(testResults)
+                }
+            }
+        }
+        
+        stage('Package Lambdas') {
+            steps {
+                script {
+                    terraformUtils.packageLambdaFunctions()
+                }
+            }
+        }
+        
+        stage('Build Lambda Layers') {
+            steps {
+                script {
+                    terraformUtils.buildLambdaLayers()
                 }
             }
         }
@@ -51,60 +100,6 @@ pipeline {
                         params.TF_BACKEND_KEY,
                         params.AWS_REGION
                     )
-                }
-            }
-        }
-        
-        stage('Build Lambda Layers') {
-            steps {
-                script {
-                    terraformUtils.buildLambdaLayers()
-                }
-            }
-        }
-        
-        stage('Package Lambdas') {
-            steps {
-                script {
-                    // Install function-specific dependencies and package
-                    dir('lambdas/check_certificate') {
-                        sh 'pip install -r requirements.txt -t .'
-                        // Remove dependencies that are in the layer
-                        sh 'rm -rf boto3* botocore* dateutil* requests*'
-                        sh 'zip -r ../check_certificate.zip .'
-                    }
-                    
-                    dir('lambdas/generate_certificate') {
-                        sh 'pip install -r requirements.txt -t .'
-                        // Remove dependencies that are in the layer
-                        sh 'rm -rf boto3* botocore* dateutil* requests* certbot*'
-                        sh 'zip -r ../generate_certificate.zip .'
-                    }
-                    
-                    dir('lambdas/replace_certificate') {
-                        sh 'pip install -r requirements.txt -t .'
-                        // Remove dependencies that are in the layer
-                        sh 'rm -rf boto3* botocore* dateutil* requests*'
-                        sh 'zip -r ../replace_certificate.zip .'
-                    }
-                }
-            }
-        }
-        
-        stage('Run Unit Tests') {
-            steps {
-                script {
-                    dir('lambdas/check_certificate') {
-                        sh 'python -m pytest test_check_certificate.py -v'
-                    }
-                    
-                    dir('lambdas/generate_certificate') {
-                        sh 'python -m pytest test_generate_certificate.py -v'
-                    }
-                    
-                    dir('lambdas/replace_certificate') {
-                        sh 'python -m pytest test_replace_certificate.py -v'
-                    }
                 }
             }
         }
@@ -128,7 +123,7 @@ pipeline {
         stage('Terraform Plan') {
             steps {
                 script {
-                    terraformUtils.terraformPlan('terraform', "-var='domain=${params.DOMAIN}' -var='certificate_bucket=${env.CERTIFICATE_BUCKET}' -out=tfplan")
+                    terraformUtils.terraformPlan('terraform', "-var='domain=${params.DOMAIN}' -var='certificate_bucket=${env.CERTIFICATE_BUCKET}' -var='log_level=${params.LOG_LEVEL}' -out=tfplan")
                 }
             }
         }
@@ -140,6 +135,25 @@ pipeline {
             steps {
                 script {
                     terraformUtils.terraformApply('terraform', "tfplan")
+                    
+                    // Get the S3 bucket name for test reports
+                    def certificateBucket = terraformUtils.terraformOutput('terraform', 's3_bucket')
+                    env.DEPLOYED_BUCKET = certificateBucket
+                }
+            }
+        }
+        
+        stage('Upload Test Reports') {
+            when {
+                expression { !params.DESTROY && env.DEPLOYED_BUCKET }
+            }
+            steps {
+                script {
+                    // Upload test reports to the deployed S3 bucket
+                    def s3Path = pythonUtils.uploadTestReportsToS3(env.DEPLOYED_BUCKET, params.AWS_REGION)
+                    env.TEST_REPORTS_PATH = s3Path
+                    
+                    echo "Test reports uploaded to: s3://${env.DEPLOYED_BUCKET}/${s3Path}/"
                 }
             }
         }
@@ -150,7 +164,7 @@ pipeline {
             }
             steps {
                 script {
-                    terraformUtils.terraformDestroy('terraform', "-var='domain=${params.DOMAIN}' -var='certificate_bucket=${env.CERTIFICATE_BUCKET}'")
+                    terraformUtils.terraformDestroy('terraform', "-var='domain=${params.DOMAIN}' -var='certificate_bucket=${env.CERTIFICATE_BUCKET}' -var='log_level=${params.LOG_LEVEL}'")
                 }
             }
         }
@@ -164,7 +178,6 @@ pipeline {
                     def stepFunctionArn = terraformUtils.terraformOutput('terraform', 'step_function_arn')
                     echo "Step Function ARN: ${stepFunctionArn}"
                     
-                    // Store output as environment variable for downstream jobs
                     env.STEP_FUNCTION_ARN = stepFunctionArn
                 }
             }
@@ -177,15 +190,38 @@ pipeline {
                 // Clean up Terraform files
                 terraformUtils.cleanupTerraform()
                 
-                // Clean up workspace
+                // Clean up test artifacts
+                sh '''
+                    find . -name "*.pyc" -delete
+                    find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+                    find . -name ".pytest_cache" -type d -exec rm -rf {} + 2>/dev/null || true
+                    find . -name "htmlcov" -type d -exec rm -rf {} + 2>/dev/null || true
+                    find . -name ".coverage" -delete
+                    find . -name "coverage.xml" -delete
+                    rm -f combined-coverage-report.html
+                '''
+                
                 cleanWs()
             }
         }
         success {
-            echo 'Certificate management pipeline completed successfully'
+            script {
+                if (!params.DESTROY && env.TEST_REPORTS_PATH) {
+                    echo "✅ Pipeline completed successfully"
+                    echo "📊 Test reports: s3://${env.DEPLOYED_BUCKET}/${env.TEST_REPORTS_PATH}/"
+                    echo "🔗 Step Function: ${env.STEP_FUNCTION_ARN}"
+                } else if (params.DESTROY) {
+                    echo "🗑️  Resources destroyed successfully"
+                } else {
+                    echo "✅ Pipeline completed successfully"
+                }
+            }
+        }
+        unstable {
+            echo "⚠️  Pipeline completed with warnings (test coverage below threshold)"
         }
         failure {
-            echo 'Certificate management pipeline failed'
+            echo "❌ Pipeline failed"
         }
     }
 }

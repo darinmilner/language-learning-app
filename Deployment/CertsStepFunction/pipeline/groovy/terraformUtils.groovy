@@ -1,10 +1,10 @@
-// vars/terraformUtils.groovy
+// terraformUtils.groovy
 
 def installTerraform(version = '1.1.7') {
     echo "Installing Terraform ${version}"
     sh """
-        wget https://releases.hashicorp.com/terraform/${version}/terraform_${version}_linux_amd64.zip
-        unzip terraform_${version}_linux_amd64.zip
+        wget -q https://releases.hashicorp.com/terraform/${version}/terraform_${version}_linux_amd64.zip
+        unzip -q terraform_${version}_linux_amd64.zip
         sudo mv terraform /usr/local/bin/
         rm terraform_${version}_linux_amd64.zip
         terraform version
@@ -14,8 +14,8 @@ def installTerraform(version = '1.1.7') {
 def installAwsCli(version = '2.4.0') {
     echo "Installing AWS CLI ${version}"
     sh """
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${version}.zip" -o "awscliv2.zip"
-        unzip awscliv2.zip
+        curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${version}.zip" -o "awscliv2.zip"
+        unzip -q awscliv2.zip
         sudo ./aws/install --update
         rm -rf awscliv2.zip aws/
         aws --version
@@ -98,4 +98,38 @@ def cleanupTerraform() {
         rm -f terraform.tfstate*
         rm -f tfplan
     '''
+}
+
+def packageLambdaFunctions() {
+    echo "Packaging Lambda functions"
+    
+    def lambdaDirs = [
+        'lambdas/check_certificate',
+        'lambdas/generate_certificate',
+        'lambdas/replace_certificate'
+    ]
+    
+    lambdaDirs.each { dir ->
+        if (fileExists(dir)) {
+            echo "Packaging ${dir}"
+            // Remove any existing zip files and test artifacts
+            sh """
+                cd ${dir} && \
+                rm -f *.zip && \
+                rm -rf __pycache__ && \
+                rm -rf *.pyc && \
+                rm -rf htmlcov && \
+                rm -f .coverage && \
+                rm -f coverage.xml
+            """
+            
+            // Create zip file with only necessary files
+            sh """
+                cd ${dir} && \
+                zip -r ../${dir.split('/').last()}.zip . -x "test_*" "*.pyc" "__pycache__/*" ".pytest_cache/*" "htmlcov/*"
+            """
+        }
+    }
+    
+    echo "Lambda functions packaged successfully"
 }

@@ -1,0 +1,6 @@
+# Get current account ID
+data "aws_caller_identity" "current" {}
+
+data "aws_s3_bucket" "certificate_bucket" {
+  bucket = var.bucket
+}

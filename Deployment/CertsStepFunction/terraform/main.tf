@@ -2,49 +2,57 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Lambda functions
-resource "aws_lambda_function" "check_certificate" {
-  filename      = "lambdas/check_certificate.zip"
-  function_name = "check_certificate"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "index.lambda_handler"
-  runtime       = "python3.12"
-  layers        = [aws_lambda_layer_version.shared_python_layer.arn]
+# Dynamic Lambda function creation using for_each
+resource "aws_lambda_function" "certificate_management" {
+  for_each = local.lambda_functions
 
-  environment {
-    variables = {
-      CERTIFICATE_BUCKET = var.certificate_bucket
+  filename      = each.value.filename
+  function_name = each.key
+  role          = aws_iam_role.lambda_role.arn
+  handler       = each.value.handler
+  runtime       = var.runtime
+  timeout       = each.value.timeout
+  layers        = each.value.layers
+
+  dynamic "environment" {
+    for_each = length(each.value.environment) > 0 ? [1] : []
+    content {
+      variables = merge(
+        each.value.environment,
+        {
+          S3_BUCKET = aws_s3_bucket.certificate_bucket.bucket
+        }
+      )
     }
+  }
+
+  kms_key_arn = aws_kms_key.certificate_management.arn
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_basic_execution,
+    aws_cloudwatch_log_group.lambda_logs
+  ]
+}
+
+# CloudWatch Log Groups for each Lambda
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  for_each = local.lambda_functions
+
+  name              = "/aws/lambda/${each.key}"
+  retention_in_days = 30
+
+  tags = {
+    Environment = "production"
   }
 }
 
-resource "aws_lambda_function" "generate_certificate" {
-  filename      = "lambdas/generate_certificate.zip"
-  function_name = "generate_certificate"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "index.lambda_handler"
-  runtime       = "python3.12"
-  timeout       = 300 # 5 minutes for Certbot operations
-  layers        = [aws_lambda_layer_version.shared_python_layer.arn]
+# Lambda Alias for each function
+resource "aws_lambda_alias" "certificate_management" {
+  for_each = local.lambda_functions
 
-  environment {
-    variables = {
-      CERTIFICATE_BUCKET = var.certificate_bucket
-    }
-  }
-}
+  name             = "production"
+  function_name    = aws_lambda_function.certificate_management[each.key].function_name
+  function_version = "$LATEST"
 
-resource "aws_lambda_function" "replace_certificate" {
-  filename      = "lambdas/replace_certificate.zip"
-  function_name = "replace_certificate"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "index.lambda_handler"
-  runtime       = "python3.12"
-  layers        = [aws_lambda_layer_version.shared_python_layer.arn]
-
-  environment {
-    variables = {
-      CERTIFICATE_BUCKET = var.certificate_bucket
-    }
-  }
+  depends_on = [aws_lambda_function.certificate_management]
 }
