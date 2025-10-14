@@ -33,9 +33,9 @@ def runLambdaTests() {
     
     def testResults = [:]
     def lambdaDirs = [
-        'check_certificate': 'lambdas/check_certificate',
-        'generate_certificate': 'lambdas/generate_certificate',
-        'replace_certificate': 'lambdas/replace_certificate'
+        'check-certs': 'lambdas/check-certs',
+        'generate-certs': 'lambdas/generate-certs',
+        'replace-certs': 'lambdas/replace-certs'
     ]
     
     // Run tests for each Lambda function
@@ -150,45 +150,74 @@ def getCoverageClass(coverage) {
 }
 
 def uploadTestReportsToS3(bucketName, region) {
-    echo "Uploading test reports to S3 bucket: ${bucketName}"
+    echo "Starting test reports upload to S3..."
     
     def timestamp = new Date().format("yyyy-MM-dd-HH-mm-ss")
     def buildNumber = env.BUILD_NUMBER
     def s3BasePath = "test-reports/build-${buildNumber}-${timestamp}"
     
-    // Upload individual coverage reports
     def lambdaDirs = [
-        'check_certificate': 'lambdas/check_certificate',
-        'generate_certificate': 'lambdas/generate_certificate',
-        'replace_certificate': 'lambdas/replace_certificate'
+        'check-certs': 'lambdas/check-certs',
+        'generate-certs': 'lambdas/generate-certs',
+        'replace-certs': 'lambdas/replace-certs'
     ]
     
-    lambdaDirs.each { lambdaName, dirPath ->
-        dir(dirPath) {
-            if (fileExists('htmlcov')) {
+    def tempDir = "test-reports-temp-${buildNumber}"
+    def zipFileName = "test-reports-build-${buildNumber}-${timestamp}.zip"
+    
+    try {
+        // Setup
+        sh "mkdir -p ${tempDir}"
+        
+        // Collect test artifacts
+        lambdaDirs.each { lambdaName, dirPath ->
+            def lambdaTempDir = "${tempDir}/${lambdaName}"
+            sh "mkdir -p ${lambdaTempDir}"
+            
+            dir(dirPath) {
+                // Copy all test artifacts
                 sh """
-                    aws s3 sync htmlcov/ s3://${bucketName}/${s3BasePath}/${lambdaName}/htmlcov/ --region ${region}
+                    cp -r htmlcov/ ${lambdaTempDir}/ 2>/dev/null || true
+                    cp coverage.xml ${lambdaTempDir}/ 2>/dev/null || true
+                    cp test_results.xml ${lambdaTempDir}/ 2>/dev/null || true
+                    find . -name '*.log' -exec cp {} ${lambdaTempDir}/ \\; 2>/dev/null || true
                 """
-                echo "Uploaded HTML coverage for ${lambdaName}"
-            }
-            if (fileExists('coverage.xml')) {
-                sh """
-                    aws s3 cp coverage.xml s3://${bucketName}/${s3BasePath}/${lambdaName}/coverage.xml --region ${region}
-                """
-                echo "Uploaded XML coverage for ${lambdaName}"
             }
         }
-    }
-    
-    // Upload combined report
-    if (fileExists('combined-coverage-report.html')) {
+        
+        // Add combined report
+        sh "cp combined-coverage-report.html ${tempDir}/ 2>/dev/null || true"
+        
+        // Create build info
+        def buildInfo = """
+Build: ${buildNumber}
+Timestamp: ${timestamp}
+Branch: ${env.GIT_BRANCH ?: 'N/A'}
+Commit: ${env.GIT_COMMIT ?: 'N/A'}
+"""
+        writeFile file: "${tempDir}/build-info.txt", text: buildInfo
+        
+        // Create and upload zip
         sh """
-            aws s3 cp combined-coverage-report.html s3://${bucketName}/${s3BasePath}/combined-coverage-report.html --region ${region}
+            cd ${tempDir} && \
+            zip -r ../${zipFileName} . -q && \
+            aws s3 cp ../${zipFileName} s3://${bucketName}/${s3BasePath}/${zipFileName} --region ${region}
         """
-        echo "Uploaded combined coverage report"
+        
+        echo "Test reports uploaded to: s3://${bucketName}/${s3BasePath}/${zipFileName}"
+        return s3BasePath
+        
+    } catch (Exception e) {
+        echo "Error uploading test reports: ${e.getMessage()}"
+        currentBuild.result = 'UNSTABLE'
+        throw e
+    } finally {
+        // Cleanup
+        sh """
+            rm -rf ${tempDir} || true
+            rm -f ${zipFileName} || true
+        """
     }
-    
-    return s3BasePath
 }
 
 def validateTestCoverage(testResults, minimumCoverage = 70) {
