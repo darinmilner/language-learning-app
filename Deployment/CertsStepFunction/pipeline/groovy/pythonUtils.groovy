@@ -13,9 +13,9 @@ def installLambdaDependencies() {
     
     // Install dependencies for each Lambda function
     def lambdaDirs = [
-        'lambdas/check_certificate',
-        'lambdas/generate_certificate', 
-        'lambdas/replace_certificate'
+        'check-certs': 'lambdas/check-certs',
+        'generate-certs': 'lambdas/generate-certs',
+        'replace-certs': 'lambdas/replace-certs'
     ]
     
     lambdaDirs.each { dir ->

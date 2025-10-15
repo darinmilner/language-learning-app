@@ -14,6 +14,7 @@ logger = logging.getLogger()
 logger.setLevel(getattr(logging, log_level, logging.INFO))
 
 def lambda_handler(event, _):
+    """Lambda handler to check for expiring certificates."""
     domain = event.get('domain', 'example.com')
     transaction_id = str(uuid.uuid4())
     
