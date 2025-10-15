@@ -27,6 +27,6 @@ resource "aws_cloudwatch_log_group" "step_function_logs" {
   retention_in_days = 30
 
   tags = {
-    Environment = "production"
+    Environment = var.env
   }
 }

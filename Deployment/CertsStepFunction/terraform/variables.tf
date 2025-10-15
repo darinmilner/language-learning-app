@@ -41,3 +41,8 @@ variable "log_level" {
     error_message = "Log level must be one of: DEBUG, INFO, WARNING, ERROR."
   }
 }
+
+variable "env" {
+  type = string
+  default = "dev"
+}
