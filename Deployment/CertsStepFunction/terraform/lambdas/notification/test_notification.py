@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -24,8 +24,11 @@ class TestNotificationLambda:
     @pytest.fixture
     def mock_aws_clients(self):
         """Mock AWS clients."""
-        with patch("index.sns") as mock_sns, patch("index.s3") as mock_s3:
-            yield {"sns": mock_sns, "s3": mock_s3}
+        with patch("index.sns") as mock_sns, patch("index.s3"):
+            # Set up proper mock for SNS exceptions
+            mock_sns.exceptions.NotFoundException = type('NotFoundException', (Exception,), {})
+            mock_sns.exceptions.InvalidParameterException = type('InvalidParameterException', (Exception,), {})
+            yield {"sns": mock_sns}
 
     @pytest.fixture
     def sample_sns_event(self):
@@ -60,18 +63,14 @@ class TestNotificationLambda:
         
         assert result["status"] == index.STATUS_CODES["SNS_DISABLED"]
 
-    def test_lambda_handler_sns_event(
-        self, setup_env, mock_aws_clients, sample_sns_event
-    ):
+    def test_lambda_handler_sns_event(self, setup_env, mock_aws_clients, sample_sns_event):
         """Test Lambda handler with SNS event."""
         result = index.lambda_handler(sample_sns_event, {})
         
         assert result["status"] == index.STATUS_CODES["PROCESSED"]
         assert "results" in result
 
-    def test_lambda_handler_direct_invocation(
-        self, setup_env, mock_aws_clients, sample_direct_event
-    ):
+    def test_lambda_handler_direct_invocation(self, setup_env, mock_aws_clients, sample_direct_event):
         """Test Lambda handler with direct invocation."""
         mock_aws_clients["sns"].publish.return_value = {"MessageId": "test-message-id"}
         
@@ -80,9 +79,7 @@ class TestNotificationLambda:
         assert result["status"] == index.STATUS_CODES["SNS_SENT"]
         mock_aws_clients["sns"].publish.assert_called_once()
 
-    def test_lambda_handler_json_decode_error(
-        self, setup_env, mock_aws_clients
-    ):
+    def test_lambda_handler_json_decode_error(self, setup_env, mock_aws_clients):
         """Test Lambda handler with invalid JSON in SNS event."""
         invalid_sns_event = {
             "Records": [
@@ -100,9 +97,7 @@ class TestNotificationLambda:
         assert result["status"] == index.STATUS_CODES["PROCESSED"]
         assert result["results"][0]["status"] == index.STATUS_CODES["ERROR"]
 
-    def test_lambda_handler_unexpected_error(
-        self, setup_env, mock_aws_clients
-    ):
+    def test_lambda_handler_unexpected_error(self, setup_env):
         """Test Lambda handler with unexpected error."""
         with patch("index.is_sns_event", side_effect=Exception("Unexpected error")):
             result = index.lambda_handler({}, {})
@@ -154,6 +149,12 @@ class TestHelperFunctions:
 
 class TestProcessSnsMessages:
     """Test suite for process_sns_messages function."""
+
+    @pytest.fixture(autouse=True)
+    def setup_env(self):
+        """Set up environment variables."""
+        with patch.dict(os.environ, {"SNS_TOPIC_ARN": "test-topic"}):
+            yield
 
     def test_process_sns_messages_success(self):
         """Test successful SNS message processing."""
@@ -322,8 +323,18 @@ class TestSendSnsNotification:
 
     @pytest.fixture
     def mock_sns(self):
-        """Mock SNS client."""
+        """Mock SNS client with proper exception setup."""
         with patch("index.sns") as mock_sns:
+            # Create proper exception classes
+            class NotFoundException(Exception):
+                pass
+            
+            class InvalidParameterException(Exception):
+                pass
+            
+            # Attach exceptions to mock
+            mock_sns.exceptions.NotFoundException = NotFoundException
+            mock_sns.exceptions.InvalidParameterException = InvalidParameterException
             yield mock_sns
 
     def test_send_sns_notification_success(self, setup_env, mock_sns):
@@ -343,10 +354,7 @@ class TestSendSnsNotification:
 
     def test_send_sns_notification_topic_not_found(self, setup_env, mock_sns):
         """Test SNS notification with topic not found error."""
-        mock_sns.publish.side_effect = mock_sns.exceptions.NotFoundException(
-            error_response={"Error": {"Code": "NotFound"}},
-            operation_name="Publish"
-        )
+        mock_sns.publish.side_effect = mock_sns.exceptions.NotFoundException("Topic not found")
         
         result = index.send_sns_notification({})
         
@@ -355,10 +363,7 @@ class TestSendSnsNotification:
 
     def test_send_sns_notification_invalid_parameters(self, setup_env, mock_sns):
         """Test SNS notification with invalid parameters error."""
-        mock_sns.publish.side_effect = mock_sns.exceptions.InvalidParameterException(
-            error_response={"Error": {"Code": "InvalidParameter"}},
-            operation_name="Publish"
-        )
+        mock_sns.publish.side_effect = mock_sns.exceptions.InvalidParameterException("Invalid parameter")
         
         result = index.send_sns_notification({})
         
