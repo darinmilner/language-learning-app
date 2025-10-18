@@ -1,12 +1,13 @@
-# Step Function with external JSON definition
+# Step Function with external JSON definition including notifications
 resource "aws_sfn_state_machine" "certificate_manager" {
   name     = "certificate_manager"
   role_arn = aws_iam_role.step_function_role.arn
 
-  definition = templatefile("${path.module}/lambdas/function.json", {
+  definition = templatefile("${path.module}/step_function_definition.json", {
     check_certificate_lambda_arn    = aws_lambda_function.certificate_management["check_certificate"].arn
     generate_certificate_lambda_arn = aws_lambda_function.certificate_management["generate_certificate"].arn
     replace_certificate_lambda_arn  = aws_lambda_function.certificate_management["replace_certificate"].arn
+    notification_lambda_arn         = aws_lambda_function.notification.arn
     certificate_bucket_name         = aws_s3_bucket.certificate_bucket.bucket
   })
 
@@ -16,9 +17,7 @@ resource "aws_sfn_state_machine" "certificate_manager" {
     level                  = "ALL"
   }
 
-  tags = {
-    Environment = "production"
-  }
+  tags = local.common_tags
 }
 
 # CloudWatch Log Group for Step Function

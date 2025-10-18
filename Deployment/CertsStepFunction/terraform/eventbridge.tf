@@ -5,7 +5,7 @@ resource "aws_cloudwatch_event_rule" "monthly_cert_check" {
   schedule_expression = "cron(0 2 1 * ? *)" # 2 AM on the 1st day of every month
 
   tags = {
-    Environment = "production"
+    Environment = var.env
     Purpose     = "certificate-management"
   }
 }
@@ -39,9 +39,7 @@ resource "aws_iam_role" "eventbridge_role" {
     ]
   })
 
-  tags = {
-    Environment = "production"
-  }
+  tags = local.common_tags
 }
 
 # IAM Policy for EventBridge to execute Step Function

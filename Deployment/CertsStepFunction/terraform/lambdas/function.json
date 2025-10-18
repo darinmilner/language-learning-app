@@ -1,5 +1,5 @@
 {
-  "Comment": "SSL Certificate Management Workflow with Enhanced S3 Storage",
+  "Comment": "SSL Certificate Management Workflow with Integrated Notifications",
   "StartAt": "CheckCertificate",
   "States": {
     "CheckCertificate": {
@@ -29,12 +29,12 @@
           "Next": "GenerateCertificate"
         }
       ],
-      "Default": "Success"
+      "Default": "SendNoExpiringNotification"
     },
     "GenerateCertificate": {
       "Type": "Task",
       "Resource": "${generate_certificate_lambda_arn}",
-      "Next": "ReplaceCertificate",
+      "Next": "GenerateCertificateSuccess?",
       "Parameters": {
         "domain.$": "$.domain",
         "bucket_name": "${certificate_bucket_name}",
@@ -51,10 +51,21 @@
         }
       ]
     },
+    "GenerateCertificateSuccess?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.generation_result.success",
+          "BooleanEquals": true,
+          "Next": "ReplaceCertificate"
+        }
+      ],
+      "Default": "SendGenerationFailureNotification"
+    },
     "ReplaceCertificate": {
       "Type": "Task",
       "Resource": "${replace_certificate_lambda_arn}",
-      "End": true,
+      "Next": "ReplaceCertificateSuccess?",
       "Parameters": {
         "domain.$": "$.domain",
         "bucket_name": "${certificate_bucket_name}",
@@ -71,8 +82,88 @@
         }
       ]
     },
-    "Success": {
-      "Type": "Succeed"
+    "ReplaceCertificateSuccess?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.replacement_result.success",
+          "BooleanEquals": true,
+          "Next": "SendSuccessNotification"
+        }
+      ],
+      "Default": "SendReplacementFailureNotification"
+    },
+    "SendNoExpiringNotification": {
+      "Type": "Task",
+      "Resource": "${notification_lambda_arn}",
+      "Parameters": {
+        "notification_type": "no_expiring_certificates",
+        "domain.$": "$.domain",
+        "check_time.$": "$$.State.EnteredTime",
+        "domains_checked": [
+          {
+            "domain.$": "$.domain"
+          }
+        ],
+        "certificate_status": "valid",
+        "message": "All certificates are valid and not expiring soon"
+      },
+      "ResultPath": "$.notification_result",
+      "End": true
+    },
+    "SendSuccessNotification": {
+      "Type": "Task",
+      "Resource": "${notification_lambda_arn}",
+      "Parameters": {
+        "notification_type": "certificates_updated",
+        "domain.$": "$.domain",
+        "transaction_id.$": "$.check_result.transaction_id",
+        "update_time.$": "$$.State.EnteredTime",
+        "certificates_updated": [
+          {
+            "domain.$": "$.domain",
+            "old_certificate_arn.$": "$.check_result.certificate_arn",
+            "new_certificate_arn.$": "$.replacement_result.new_certificate_arn",
+            "expiration_date.$": "$.replacement_result.expiration_date",
+            "old_certificate_deleted.$": "$.replacement_result.old_certificate_deleted",
+            "deletion_error.$": "$.replacement_result.deletion_error"
+          }
+        ],
+        "s3_location.$": "$.replacement_result.bucket_name",
+        "message": "Certificate successfully renewed and deployed"
+      },
+      "ResultPath": "$.notification_result",
+      "End": true
+    },
+    "SendGenerationFailureNotification": {
+      "Type": "Task",
+      "Resource": "${notification_lambda_arn}",
+      "Parameters": {
+        "notification_type": "general",
+        "domain.$": "$.domain",
+        "transaction_id.$": "$.check_result.transaction_id",
+        "error_time.$": "$$.State.EnteredTime",
+        "error_details.$": "$.generation_result.error",
+        "message": "Certificate generation failed",
+        "severity": "high"
+      },
+      "ResultPath": "$.notification_result",
+      "End": true
+    },
+    "SendReplacementFailureNotification": {
+      "Type": "Task",
+      "Resource": "${notification_lambda_arn}",
+      "Parameters": {
+        "notification_type": "general",
+        "domain.$": "$.domain",
+        "transaction_id.$": "$.check_result.transaction_id",
+        "error_time.$": "$$.State.EnteredTime",
+        "error_details.$": "$.replacement_result.error",
+        "message": "Certificate replacement failed",
+        "severity": "high"
+      },
+      "ResultPath": "$.notification_result",
+      "End": true
     },
     "Failure": {
       "Type": "Fail",

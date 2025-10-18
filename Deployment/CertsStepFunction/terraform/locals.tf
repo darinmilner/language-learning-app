@@ -1,4 +1,8 @@
 locals {
+  short_region = replace(var.aws_region, "-", "")
+  common_tags = {
+    Environment = var.env
+  }
   lambda_functions = {
     check_certificate = {
       filename = "lambdas/check_certificate.zip"

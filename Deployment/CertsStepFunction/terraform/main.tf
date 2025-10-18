@@ -41,9 +41,7 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
   name              = "/aws/lambda/${each.key}"
   retention_in_days = 30
 
-  tags = {
-    Environment = "production"
-  }
+  tags = local.common_tags
 }
 
 # Lambda Alias for each function

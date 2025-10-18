@@ -42,7 +42,33 @@ variable "log_level" {
   }
 }
 
+# Notification Configuration
+variable "enable_sns_notifications" {
+  description = "Enable SNS-based notifications"
+  type        = bool
+  default     = true
+}
+
+variable "notification_emails" {
+  description = "List of email addresses to subscribe to SNS notifications"
+  type        = list(string)
+  default     = ["admin@example.com"]
+
+  validation {
+    condition = alltrue([
+      for email in var.notification_emails : can(regex("^[^@]+@[^@]+\\.[^@]+$", email))
+    ])
+    error_message = "All notification emails must be valid email addresses."
+  }
+}
+
 variable "env" {
-  type = string
-  default = "dev"
+  description = "Environment name for resource tagging"
+  type        = string
+  default     = "dev"
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.env)
+    error_message = "Environment must be one of: development, staging, production."
+  }
 }

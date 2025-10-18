@@ -4,3 +4,5 @@ botocore
 python-dateutil
 certbot-dns-route53
 requests
+pytest
+cryptography
