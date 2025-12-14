@@ -432,7 +432,7 @@ def create_sns_subject(notification_data):
     severity = notification_data.get("severity", "info")
     
     subject_prefix = EMAIL_SUBJECT_PREFIXES.get(
-        notification_type, 
+        notification_type,
         EMAIL_SUBJECT_PREFIXES["general"]
     )
     
